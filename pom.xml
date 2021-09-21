@@ -13,4 +13,17 @@
 	
 	<name>Tapis Vault Backup</name>
 	<description>Backup program for Hashicorp Vault instances</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>tapis-shared-lib</artifactId>
+            <version>${tapis-shared-java.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>args4j</groupId>
+            <artifactId>args4j</artifactId>
+        </dependency>
+     </dependencies>
+     
 </project>
