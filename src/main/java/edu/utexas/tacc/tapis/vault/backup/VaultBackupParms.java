@@ -14,7 +14,7 @@ public class VaultBackupParms
     /*                               Constants                                */
     /* ********************************************************************** */
     // Number of hours between backups.
-    private static final int DEFAULT_HOURS_BETWEEN_BACKUPS = 24;
+    private static final int DEFAULT_PERIOD_IN_HOURS = 24;
     private static final int DEFAULT_MAX_COPIES = 10;
     
     // Output directory for backup snapshots.
@@ -39,26 +39,33 @@ public class VaultBackupParms
             usage = "Output directory")
     public String outputDir = DEFAULT_OUTPUT_DIR;    
     
-    // Negative hours are interpreted as minutes (good for testing).
-    @Option(name = "-hrs", required = false, aliases = {"-hours"}, 
-            usage = "Number of hours between backups")
-    public int hours = DEFAULT_HOURS_BETWEEN_BACKUPS;
+    @Option(name = "-period", required = false, aliases = {"-hrs, -hours"}, 
+            usage = "Hours between backups (1-24)")
+    public int period = DEFAULT_PERIOD_IN_HOURS;
+    
+    @Option(name = "-now", required = false, aliases = {"-once"}, 
+            usage = "Run backup immediately and then exit")
+    public boolean now = false;
     
     @Option(name = "-copies", required = false, aliases = {"-maxcopies"}, 
             usage = "Maximum backup copies to keep locally")
-    public int maxCopies = DEFAULT_MAX_COPIES;
+    public int maxCopies = DEFAULT_MAX_COPIES;    
     
     @Option(name = "-email", required = false, aliases = {"-support"}, 
             usage = "Support email to recieve notification")
     public String email;
+    
+    @Option(name = "-dry", required = false, aliases = {"-dryrun"}, 
+            usage = "Run but don't backup or send email.")
+    public boolean dryrun = false;
     
     @Option(name = "-help", aliases = {"--help"}, 
             usage = "Display help information")
     public boolean help;
     
     // Calculated fields.
-    private int startTimeHours;
-    private int startTimeMinutes;
+    private int startTimeHour;
+    private int startTimeMinute;
     
     /* ********************************************************************** */
     /*                              Constructors                              */
@@ -74,6 +81,9 @@ public class VaultBackupParms
       printArguments();
     }
     
+    /* ********************************************************************** */
+    /*                             Package Methods                            */
+    /* ********************************************************************** */
     /* ---------------------------------------------------------------------- */
     /* printArguments:                                                        */
     /* ---------------------------------------------------------------------- */
@@ -82,19 +92,27 @@ public class VaultBackupParms
         String s = "\nVaultBackup arguments:\n" +
                    "\nVault URL: " + url + 
                    "\nStart time: " + startTime +
-                   "\nHours between backups: " + hours +
+                   "\nHours between backups: " + period +
                    "\nMaximum local copies: " + maxCopies +
                    "\nSupport email: " + email +
+                   "\nFile prefix: " + filePrefix +
+                   "\nOutput directory: " + outputDir +
+                   "\nBackup now then exit: " + now +
+                   "\nDry run: " + dryrun +
                    "\n\n";
         System.out.println(s);
     }
     
-    /* **************************************************************************** */
-    /*                               Private Methods                                */
-    /* **************************************************************************** */
-    /* ---------------------------------------------------------------------------- */
-    /* initializeParms:                                                             */
-    /* ---------------------------------------------------------------------------- */
+    // Accessors.
+    int getStartHour()   {return startTimeHour;}
+    int getStartMinute() {return startTimeMinute;}
+    
+    /* ********************************************************************** */
+    /*                               Private Methods                          */
+    /* ********************************************************************** */
+    /* ---------------------------------------------------------------------- */
+    /* initializeParms:                                                       */
+    /* ---------------------------------------------------------------------- */
     /** Parse the input arguments. */
     private void initializeParms(String[] args)
         throws Exception
@@ -136,7 +154,7 @@ public class VaultBackupParms
       // Display help and exit program.
       if (help)
         {
-         String s = "\nVaultBackup for backup up Hashicorp Vault raft database.";
+         String s = "\nVaultBackup for backup Hashicorp Vault raft database.";
          System.out.println(s);
          System.out.println("\nVaultBackup [options...]\n");
          parser.printUsage(System.out);
@@ -165,14 +183,18 @@ public class VaultBackupParms
             throw new IllegalArgumentException("Invalid startTime argument: " + startTime + ".");
         
         // Assign the start hours and minutes.
-        startTimeHours = Integer.valueOf(components[0]);
-        if (startTimeHours < 0 || startTimeHours > 23)
-            throw new IllegalArgumentException("Invalid start hour: " + startTimeHours + ".");
+        startTimeHour = Integer.valueOf(components[0]);
+        if (startTimeHour < 0 || startTimeHour > 23)
+            throw new IllegalArgumentException("Invalid start hour: " + startTimeHour + ".");
         if (components.length > 1) {
-            startTimeMinutes = Integer.valueOf(components[1]);
-            if (startTimeMinutes < 0 || startTimeMinutes > 59)
-                throw new IllegalArgumentException("Invalid start minute: " + startTimeMinutes + ".");
+            startTimeMinute = Integer.valueOf(components[1]);
+            if (startTimeMinute < 0 || startTimeMinute > 59)
+                throw new IllegalArgumentException("Invalid start minute: " + startTimeMinute + ".");
         }
+        
+        // Make sure the period is between 1 and 24.
+        if (period < 1 || period > DEFAULT_PERIOD_IN_HOURS) 
+            throw new IllegalArgumentException("Period must be between 1 and 24 hours: " + period + ".");
         
         // Check the url for being well-formed.
         URL u = new URL(url);
