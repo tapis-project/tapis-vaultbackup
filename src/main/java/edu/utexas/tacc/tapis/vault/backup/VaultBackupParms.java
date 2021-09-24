@@ -20,6 +20,12 @@ public class VaultBackupParms
     // Output directory for backup snapshots.
     private static final String DEFAULT_OUTPUT_DIR = "/root/vaultBackups";
     
+    // File path for logging VaultBackup.
+    private static final String DEFAULT_LOG_DIR = "/root";
+    
+    // Email notification info.
+    private static final int DEFAULT_SMTP_PORT = 25;
+    
     /* ********************************************************************** */
     /*                                 Fields                                 */
     /* ********************************************************************** */
@@ -35,12 +41,16 @@ public class VaultBackupParms
             usage = "Prefix for backup file name (usually stage or prod)")
     public String filePrefix;
     
-    @Option(name = "-dir", required = false, aliases = {"-outdir"}, 
-            usage = "Output directory")
-    public String outputDir = DEFAULT_OUTPUT_DIR;    
+    @Option(name = "-out", required = false, aliases = {"-outdir"}, 
+            usage = "Output directory for backed up data")
+    public String outDir = DEFAULT_OUTPUT_DIR;    
+    
+    @Option(name = "-log", required = false, aliases = {"-logdir"}, 
+            usage = "Directory for VaultBackup.out & VaultBackupProcess.out")
+    public String logDir = DEFAULT_LOG_DIR;    
     
     @Option(name = "-period", required = false, aliases = {"-hrs, -hours"}, 
-            usage = "Hours between backups (1-24)")
+            usage = "Hours between backups (>= 1)")
     public int period = DEFAULT_PERIOD_IN_HOURS;
     
     @Option(name = "-now", required = false, aliases = {"-once"}, 
@@ -51,9 +61,19 @@ public class VaultBackupParms
             usage = "Maximum backup copies to keep locally")
     public int maxCopies = DEFAULT_MAX_COPIES;    
     
-    @Option(name = "-email", required = false, aliases = {"-support"}, 
-            usage = "Support email to recieve notification")
-    public String email;
+    @Option(name = "-smtp-to", required = false, 
+            depends = {"-smtp-host"},
+            usage = "Email address to recieve notification")
+    public String smtpTo;
+    
+    @Option(name = "-smtp-host", required = false,
+            depends = {"-smtp-to"},
+            usage = "SMTP outbound mail server (no authentication)")
+    public String smtpHost;
+    
+    @Option(name = "-smtp-port", required = false,
+            usage = "Port on outbound mail server")
+    public int smtpPort = DEFAULT_SMTP_PORT;
     
     @Option(name = "-dry", required = false, aliases = {"-dryrun"}, 
             usage = "Run but don't backup or send email.")
@@ -78,7 +98,6 @@ public class VaultBackupParms
     {
       initializeParms(args);
       validateParms();
-      printArguments();
     }
     
     /* ********************************************************************** */
@@ -87,20 +106,23 @@ public class VaultBackupParms
     /* ---------------------------------------------------------------------- */
     /* printArguments:                                                        */
     /* ---------------------------------------------------------------------- */
-    void printArguments()
+    String printArguments()
     {
         String s = "\nVaultBackup arguments:\n" +
                    "\nVault URL: " + url + 
                    "\nStart time: " + startTime +
                    "\nHours between backups: " + period +
                    "\nMaximum local copies: " + maxCopies +
-                   "\nSupport email: " + email +
                    "\nFile prefix: " + filePrefix +
-                   "\nOutput directory: " + outputDir +
+                   "\nOutput directory: " + outDir +
+                   "\nLog directory: " + logDir +
                    "\nBackup now then exit: " + now +
                    "\nDry run: " + dryrun +
+                   "\nSMTP recipient email: " + smtpTo +
+                   "\nSMTP mail server host: " + smtpHost +
+                   "\nSMTP mail server port: " + smtpPort +
                    "\n\n";
-        System.out.println(s);
+        return s;
     }
     
     // Accessors.
@@ -193,8 +215,12 @@ public class VaultBackupParms
         }
         
         // Make sure the period is between 1 and 24.
-        if (period < 1 || period > DEFAULT_PERIOD_IN_HOURS) 
-            throw new IllegalArgumentException("Period must be between 1 and 24 hours: " + period + ".");
+        if (period < 1) 
+            throw new IllegalArgumentException("Period must be at least 1 hour: " + period + ".");
+        
+        // The output directory must be an absolute path.
+        if (!outDir.startsWith("/"))
+            throw new IllegalArgumentException("The output directory must be an absolute path: " + outDir + ".");
         
         // Check the url for being well-formed.
         URL u = new URL(url);

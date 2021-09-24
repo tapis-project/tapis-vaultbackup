@@ -1,17 +1,30 @@
 package edu.utexas.tacc.tapis.vault.backup;
 
+import java.io.BufferedWriter;
 import java.io.Console;
 import java.io.File;
+import java.io.FileWriter;
+import java.io.FilenameFilter;
 import java.io.IOException;
+import java.lang.ProcessBuilder.Redirect;
+import java.net.InetAddress;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.TreeMap;
 
 import org.apache.commons.lang3.StringUtils;
 
-public class VaultBackup 
+import edu.utexas.tacc.tapis.shared.providers.email.EmailClientParameters;
+import edu.utexas.tacc.tapis.shared.providers.email.clients.SMTPEmailClient;
+import edu.utexas.tacc.tapis.shared.providers.email.enumeration.EmailProviderType;
+import edu.utexas.tacc.tapis.shared.utils.HTMLizer;
+
+public final class VaultBackup 
 {
     /* ********************************************************************** */
     /*                               Constants                                */
@@ -20,8 +33,19 @@ public class VaultBackup
     private static String BACKUP_FILENAME_STUB = "-vault-backup-";
     private static String BACKUP_FILENAME_EXT  = ".snap";
     
-    // A way to limit backup frequency in case things get wierd.
-    private static int MIN_SLEEP_SECONDS = 120;
+    // Output files.
+    private static String LOG_FILE = "VaultBackup.out";
+    private static String CMD_OUTPUT_FILE = "VaultBackupCommand.out";
+    
+    // A way to limit backup frequency in case things get weird.
+    private static final int MIN_SLEEP_SECONDS = 120;
+    
+    // Process builder error code.
+    private static final int PROCESS_BUILDER_ERROR = 666;
+    
+    // Email constants.
+    private static final String EMAIL_FROM_ADDR = "vault-backup@tacc.cloud";
+    private static final String EMAIL_TO_NAME   = "VaultBackup-Support";
     
     /* ********************************************************************** */
     /*                                Fields                                  */
@@ -31,6 +55,12 @@ public class VaultBackup
     
     // The user-specified start time.
     private final LocalTime        _startTime;
+    
+    // Set up the VaultBackup.out log file.
+    private BufferedWriter         _logWriter;
+    
+    // For documentation purposes we record the deleted backups.
+    private List<String>           _deletedBackupFiles = new ArrayList<String>();
     
     /* ********************************************************************** */
     /*                              Constructors                              */
@@ -55,7 +85,7 @@ public class VaultBackup
         // Parse the command line parameters.
         VaultBackupParms parms = new VaultBackupParms(args);
         
-        System.out.println("Starting VaultBackup");
+        // Run the backups.
         var backup = new VaultBackup(parms);
         backup.execute();
     }
@@ -68,8 +98,12 @@ public class VaultBackup
     /* ---------------------------------------------------------------------- */
     private void execute()
     {
+        // Open log file.
+        openLogFile();
+        log("Starting VaultBackup");
+        
         // Log the command line arguments.
-        _parms.printArguments();
+        log(_parms.printArguments());
         
         // Get Vault root token.
         String token = getToken();
@@ -81,12 +115,11 @@ public class VaultBackup
             
             // Get next backup time.
             LocalDateTime nextBackupTime = getNextBackupTime(localNow);
-            System.out.println("Current time: " + localNow);
-            System.out.println("Next backup time: " + nextBackupTime);
             
             // Determine how long to sleep.
             long sleepMillis = getSleepMillis(localNow, nextBackupTime);
-            System.out.println("Sleep milliseconds: " + sleepMillis);
+            log("LocalTime=" + localNow + ", NextBackup=" + nextBackupTime +
+                   ", SleepMilliseconds=" + sleepMillis);
             
             // Sleep until the next scheduled backup time.
             if (!_parms.dryrun && sleepMillis > 0) 
@@ -95,7 +128,7 @@ public class VaultBackup
                     // Ignore possibly spurious interrupts.
                     String msg = "Ignoring InterruptedException received while sleeping until next backup time: " +
                                  e.getMessage();
-                    System.out.println(msg);
+                    log(msg);
                     continue;
                 }
             
@@ -103,17 +136,21 @@ public class VaultBackup
             String backupFilename = getbackupFilename();
             
             // Issue the backup call.
+            int rc = backupVault(backupFilename, token);
             
             // Remove old backups.
-            removeBackups();
+            if (rc == 0) removeBackups();
             
             // Send the backup email.
-            sendEmail(localNow);
+            sendEmail(backupFilename, rc);
             
             // Exit if this was a one time backup invocation,
             // otherwise wait for the next backup time.
             if (_parms.now || _parms.dryrun) break;
         }
+        
+        // Close log before exiting.
+        closeLogFile();
     }
 
     /* ---------------------------------------------------------------------- */
@@ -277,7 +314,7 @@ public class VaultBackup
         // doesn't exist.
         int nextSeqNo = 0;
         while (true) {
-            File f = new File(_parms.outputDir, candidate + BACKUP_FILENAME_EXT);
+            File f = new File(_parms.outDir, candidate + BACKUP_FILENAME_EXT);
             if (!f.exists()) break;
             candidate = originalFilename + "-" + ++nextSeqNo;
         }
@@ -287,21 +324,211 @@ public class VaultBackup
     }
     
     /* ---------------------------------------------------------------------------- */
+    /* backupVault:                                                                 */
+    /* ---------------------------------------------------------------------------- */
+    private int backupVault(String backupFilename, String token)
+    {
+        // Assemble the command and its arguments.
+        var cmdList = new ArrayList<String>(30);
+//        cmdList.add("vault");
+//        cmdList.add("operator");
+//        cmdList.add("raft");
+//        cmdList.add("snapshot");
+//        cmdList.add("save");
+//        cmdList.add(backupFilename);
+        cmdList.add("env");
+        
+        // Create the process builder.
+        var pb = new ProcessBuilder(cmdList);
+        
+        // Populate environment map.
+        var env = pb.environment();
+        env.put("VAULT_ADDR", _parms.url);
+        env.put("VAULT_TOKEN", token);
+        
+        // Set the working directory to where the backups 
+        // will be written.  This allows us to use a simple
+        // file name in the above cmdList.
+        pb.directory(new File(_parms.outDir));
+        
+        // Set i/o options for the spawned process.
+        // The same file gets overwritten on each execution.
+        pb.redirectErrorStream(true);
+        var cmdOutFile = new File(_parms.logDir, CMD_OUTPUT_FILE);
+        pb.redirectOutput(Redirect.to(cmdOutFile));
+        
+        // Log the command.
+        log("Executing: " + String.join(" ", cmdList));
+
+        // No actual backup when testing.
+        if (_parms.dryrun) return 0;
+
+        // Run the command.
+        Process process = null;
+        try {process = pb.start();}
+            catch (Exception e) {
+                String msg = "VaultBackup failed: " + e.getMessage();
+                log(msg);
+                return PROCESS_BUILDER_ERROR;
+            }
+        
+        // Return the vault backup utility's exit code.
+        return process.exitValue();
+    }
+    
+    /* ---------------------------------------------------------------------------- */
     /* removeBackups:                                                               */
     /* ---------------------------------------------------------------------------- */
     private void removeBackups()
     {
-        // No removal when testing.
-        if (_parms.dryrun) return;
+        // Get a listing of files in the output directory.
+        File outDir  = new File(_parms.outDir);
+        File[] files = outDir.listFiles(new OutputFilenameFilter());
+        
+        // See if we are over the user's limit of backup files.
+        if (files.length <= _parms.maxCopies) return;
+        
+        // Let's alphabetize the part of the file name starting with the date.
+        // The earlier backups have alphabetically earlier names if we ignore
+        // the user-chosen prefix.
+        var map = new TreeMap<String,File>();
+        for (var f : files) {
+            String fn = f.getName();
+            int index = fn.indexOf(BACKUP_FILENAME_STUB);
+            if (index > 0) {
+                String key = fn.substring(index);
+                map.put(key, f);
+            }
+        }
+        
+        // Calculate the number of deletions required
+        // and then delete that number of files from 
+        // the beginning of the alphabetize map.
+        int deleteCnt = map.size() - _parms.maxCopies;
+        while (deleteCnt > 0) {
+            var f = map.firstEntry().getValue();
+            if (!_parms.dryrun) f.delete();  // No removal when testing.
+            deleteCnt--;
+            _deletedBackupFiles.add(f.getAbsolutePath());
+        }
     }
 
     /* ---------------------------------------------------------------------------- */
     /* sendEmail:                                                                   */
     /* ---------------------------------------------------------------------------- */
-    private void sendEmail(LocalDateTime localNow)
+    private void sendEmail(String backupFilename, int rc)
     {
         // No email when testing.
         if (_parms.dryrun) return;
+        if (StringUtils.isBlank(_parms.smtpTo)) return;
+        
+        // Assign subject.
+        var emailParms = new EmailParameters();
+        String subject;
+        if (rc == 0) subject = emailParms.getEmailFromName() + " BACKUP SUCCEEDED";
+          else subject = emailParms.getEmailFromName() + " BACKUP FAILED";
+        
+        // Create body.
+        String body = generateEmailBody(backupFilename, rc);
+        
+        // Best effort attempt.
+        try {
+            var client = new SMTPEmailClient(emailParms);
+            client.send(emailParms.getEmailUser(),
+                        _parms.smtpTo,
+                        subject,
+                        body, HTMLizer.htmlize(body));
+        } catch (Exception e) {
+            String msg = "\nFAILED to send email to " + _parms.smtpTo 
+                         + " concerning backup to " + backupFilename 
+                         + ": " + e.getMessage();
+            log(msg);
+        }
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* generateEmailBody:                                                           */
+    /* ---------------------------------------------------------------------------- */
+    private String generateEmailBody(String backupFilename, int rc)
+    {
+        // Best effort attempt to get host information.
+        InetAddress inetAddress = null;
+        String ipAddress = null;
+        String hostName = null;
+        try {
+            inetAddress = InetAddress.getLocalHost();
+            ipAddress = inetAddress.getHostAddress();
+            hostName  = inetAddress.getHostName();
+        } catch (Exception e) {}
+        
+        // Everything depends on whether the backup succeeded.
+        String body;
+        if (rc == 0) 
+            body = "Successfully backed up Vault database to " + backupFilename +
+                    " in directory " + _parms.outDir + ".\n\n";
+        else 
+            body = "FAILED to backed up Vault database to " + backupFilename +
+                   " in directory " + _parms.outDir + ".\n\n";
+            
+        // Host info.
+        if (hostName != null)  body += "Host: " + hostName + "\n";
+        if (ipAddress != null) body += "IP: " + ipAddress + "\n";
+        if (hostName != null || ipAddress != null) body += "\n";
+            
+        // This program's log file.
+        if (_logWriter != null) {
+            var logFile = new File(_parms.logDir, LOG_FILE);
+            body += "The VaultBackup utility log is at: " +  logFile.getAbsolutePath() + "\n";
+        }
+            
+        // Vault backup process log information.
+        var cmdOutFile = new File(_parms.logDir, CMD_OUTPUT_FILE);
+        body += "The Vault operator log is at: " + cmdOutFile.getAbsolutePath() + "\n"; 
+            
+        // Catalog deleted files.
+        if (!_deletedBackupFiles.isEmpty()) {
+             body += "\nThe following files were deleted to maintain a maximum of " 
+                     + _parms.maxCopies + " backups locally:\n\n";
+             for (String s : _deletedBackupFiles) body += "    - " + s + "\n";
+        }
+            
+        return body;
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* log:                                                                         */
+    /* ---------------------------------------------------------------------------- */
+    private void log(String msg)
+    {
+        // Write to console and log file (if possible).
+        System.out.println(msg);
+        if (_logWriter != null) 
+            try {
+                _logWriter.write(msg);
+                _logWriter.write("\n");
+                _logWriter.flush();
+            } catch (Exception e) {}
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* openLogFile:                                                                 */
+    /* ---------------------------------------------------------------------------- */
+    private void openLogFile()
+    {
+        // Open the log file for writing.
+        try {_logWriter = new BufferedWriter(new FileWriter(new File(_parms.logDir, LOG_FILE)));}
+            catch (Exception e) {
+                String msg = "VaultBackup failed: " + e.getMessage();
+                log(msg);
+            }
+    }
+
+    /* ---------------------------------------------------------------------------- */
+    /* closeLogFile:                                                                 */
+    /* ---------------------------------------------------------------------------- */
+    private void closeLogFile()
+    {
+        if (_logWriter != null) try {_logWriter.close();} catch (Exception e) {}
     }
 
     /* ---------------------------------------------------------------------------- */
@@ -315,7 +542,7 @@ public class VaultBackup
      * @param prompt the text to display to get a response from the user
      * @return user input or null if no input was captured
      */
-    public static String getInputFromConsole(String prompt)
+    private static String getInputFromConsole(String prompt)
     {
       // Get the console.
       Console console = System.console();
@@ -342,5 +569,72 @@ public class VaultBackup
       
       // We failed to get a password.
       return null;
+    }
+    
+    /* ********************************************************************** */
+    /*                       OutputFilenameFilter class                       */
+    /* ********************************************************************** */
+    private final class OutputFilenameFilter
+     implements FilenameFilter
+    {
+        @Override
+        public boolean accept(File dir, String name) 
+        {
+            // We only consider files in the output directory that conform
+            // to the naming convention instituted by this program.
+            if (!dir.getAbsolutePath().equals(_parms.outDir)) return false;
+            if (!name.endsWith(BACKUP_FILENAME_EXT)) return false;
+            if (!name.contains(BACKUP_FILENAME_STUB)) return false;
+            
+            return true;
+        }
+    }
+
+    /* **************************************************************************** */
+    /*                             Email Parameter Class                            */
+    /* **************************************************************************** */
+    /** Class uses some hardcoded parameters. */
+    private final class EmailParameters
+     implements EmailClientParameters
+    {
+        @Override
+        public EmailProviderType getEmailProviderType() {
+            return EmailProviderType.SMTP;
+        }
+
+        @Override
+        public boolean isEmailAuth() {
+            return false;
+        }
+
+        @Override
+        public String getEmailHost() {
+            return _parms.smtpHost;
+        }
+
+        @Override
+        public int getEmailPort() {
+            return _parms.smtpPort;
+        }
+
+        @Override
+        public String getEmailUser() {
+            return EMAIL_TO_NAME;
+        }
+
+        @Override
+        public String getEmailPassword() {
+            return "no-password";
+        }
+
+        @Override
+        public String getEmailFromName() {
+            return "VaultBackup-" + _parms.filePrefix;
+        }
+
+        @Override
+        public String getEmailFromAddress() {
+            return EMAIL_FROM_ADDR;
+        }
     }
 }
