@@ -138,7 +138,7 @@ public final class VaultBackup
             // Issue the backup call.
             int rc = backupVault(backupFilename, token);
             
-            // Remove old backups.
+            // Remove old backups only on success.
             if (rc == 0) removeBackups();
             
             // Send the backup email.
@@ -430,6 +430,7 @@ public final class VaultBackup
         
         // Create body.
         String body = generateEmailBody(backupFilename, rc);
+        String htmlBody = generateEmailHTMLBody(backupFilename, rc);
         
         // Best effort attempt.
         try {
@@ -437,7 +438,8 @@ public final class VaultBackup
             client.send(emailParms.getEmailUser(),
                         _parms.smtpTo,
                         subject,
-                        body, HTMLizer.htmlize(body));
+                        body, 
+                        htmlBody);
         } catch (Exception e) {
             String msg = "\nFAILED to send email to " + _parms.smtpTo 
                          + " concerning backup to " + backupFilename 
@@ -453,11 +455,9 @@ public final class VaultBackup
     {
         // Best effort attempt to get host information.
         InetAddress inetAddress = null;
-        String ipAddress = null;
         String hostName = null;
         try {
             inetAddress = InetAddress.getLocalHost();
-            ipAddress = inetAddress.getHostAddress();
             hostName  = inetAddress.getHostName();
         } catch (Exception e) {}
         
@@ -465,31 +465,75 @@ public final class VaultBackup
         String body;
         if (rc == 0) 
             body = "Successfully backed up Vault database to " + backupFilename +
-                    " in directory " + _parms.outDir + ".\n\n";
+                    " in directory " + _parms.outDir + ".  \n\n";
         else 
             body = "FAILED to backed up Vault database to " + backupFilename +
-                   " in directory " + _parms.outDir + ".\n\n";
+                   " in directory " + _parms.outDir + ".  \n\n";
             
         // Host info.
-        if (hostName != null)  body += "Host: " + hostName + "\n";
-        if (ipAddress != null) body += "IP: " + ipAddress + "\n";
-        if (hostName != null || ipAddress != null) body += "\n";
+        if (hostName != null)  body += "Host: " + hostName + ".  \n\n";
             
         // This program's log file.
         if (_logWriter != null) {
             var logFile = new File(_parms.logDir, LOG_FILE);
-            body += "The VaultBackup utility log is at: " +  logFile.getAbsolutePath() + "\n";
+            body += "The VaultBackup utility log is at: " +  logFile.getAbsolutePath() + ".  \n";
         }
             
         // Vault backup process log information.
         var cmdOutFile = new File(_parms.logDir, CMD_OUTPUT_FILE);
-        body += "The Vault operator log is at: " + cmdOutFile.getAbsolutePath() + "\n"; 
+        body += "The Vault operator log is at: " + cmdOutFile.getAbsolutePath() + ".  \n"; 
             
         // Catalog deleted files.
         if (!_deletedBackupFiles.isEmpty()) {
              body += "\nThe following files were deleted to maintain a maximum of " 
                      + _parms.maxCopies + " backups locally:\n\n";
-             for (String s : _deletedBackupFiles) body += "    - " + s + "\n";
+             for (String s : _deletedBackupFiles) body += "  " + s + "\n";
+        }
+            
+        return body;
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* generateEmailHTMLBody:                                                       */
+    /* ---------------------------------------------------------------------------- */
+    private String generateEmailHTMLBody(String backupFilename, int rc)
+    {
+        // Best effort attempt to get host information.
+        InetAddress inetAddress = null;
+        String hostName = null;
+        try {
+            inetAddress = InetAddress.getLocalHost();
+            hostName  = inetAddress.getHostName();
+        } catch (Exception e) {}
+        
+        // Everything depends on whether the backup succeeded.
+        String body;
+        if (rc == 0) 
+            body = "<p>Successfully backed up Vault database to " + backupFilename +
+                    " in directory " + _parms.outDir + ".</p>";
+        else 
+            body = "<p>FAILED to backed up Vault database to " + backupFilename +
+                   " in directory " + _parms.outDir + ".</p>";
+            
+        // Host info.
+        if (hostName != null)  body += "<p>Host: " + hostName + ".</p>";
+            
+        // This program's log file.
+        if (_logWriter != null) {
+            var logFile = new File(_parms.logDir, LOG_FILE);
+            body += "<p>The VaultBackup utility log is at: " +  logFile.getAbsolutePath() + ".</p>";
+        }
+            
+        // Vault backup process log information.
+        var cmdOutFile = new File(_parms.logDir, CMD_OUTPUT_FILE);
+        body += "<p>The Vault operator log is at: " + cmdOutFile.getAbsolutePath() + ".</p>"; 
+            
+        // Catalog deleted files.
+        if (!_deletedBackupFiles.isEmpty()) {
+             body += "<p>The following files were deleted to maintain a maximum of " 
+                     + _parms.maxCopies + " backups locally:</p>";
+             for (String s : _deletedBackupFiles) 
+                 body += "<p>&nbsp;&nbsp;&nbsp;&nbsp;-&nbsp" + s + "</p>";
         }
             
         return body;
