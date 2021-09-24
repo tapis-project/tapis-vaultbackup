@@ -22,7 +22,6 @@ import org.apache.commons.lang3.StringUtils;
 import edu.utexas.tacc.tapis.shared.providers.email.EmailClientParameters;
 import edu.utexas.tacc.tapis.shared.providers.email.clients.SMTPEmailClient;
 import edu.utexas.tacc.tapis.shared.providers.email.enumeration.EmailProviderType;
-import edu.utexas.tacc.tapis.shared.utils.HTMLizer;
 
 public final class VaultBackup 
 {
@@ -330,13 +329,12 @@ public final class VaultBackup
     {
         // Assemble the command and its arguments.
         var cmdList = new ArrayList<String>(30);
-//        cmdList.add("vault");
-//        cmdList.add("operator");
-//        cmdList.add("raft");
-//        cmdList.add("snapshot");
-//        cmdList.add("save");
-//        cmdList.add(backupFilename);
-        cmdList.add("env");
+        cmdList.add("vault");
+        cmdList.add("operator");
+        cmdList.add("raft");
+        cmdList.add("snapshot");
+        cmdList.add("save");
+        cmdList.add(backupFilename);
         
         // Create the process builder.
         var pb = new ProcessBuilder(cmdList);
