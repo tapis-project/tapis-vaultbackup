@@ -9,7 +9,7 @@
 	</parent>
 	
 	<artifactId>tapis-vaultbackup</artifactId>
-	<version>0.0.1</version>
+	<version>1.0</version>
 	
 	<name>Tapis Vault Backup</name>
 	<description>Backup program for Hashicorp Vault instances</description>
