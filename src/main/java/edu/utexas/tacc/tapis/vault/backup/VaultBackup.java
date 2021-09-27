@@ -16,6 +16,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -41,6 +42,10 @@ public final class VaultBackup
     
     // Process builder error code.
     private static final int PROCESS_BUILDER_ERROR = 666;
+    private static final int PROCESS_TIMEOUT_ERROR = 677;
+    
+    // Seconds to wait for the actual backup to complete.
+    private static final int BACKUP_TIMEOUT_SECONDS = 120;
     
     // Email constants.
     private static final String EMAIL_FROM_ADDR = "vault-backup@tacc.cloud";
@@ -138,7 +143,7 @@ public final class VaultBackup
             int rc = backupVault(backupFilename, token);
             
             // Remove old backups only on success.
-            if (rc == 0) removeBackups();
+            if (rc == 0 || rc == PROCESS_TIMEOUT_ERROR) removeBackups();
             
             // Send the backup email.
             sendEmail(backupFilename, rc);
@@ -368,6 +373,15 @@ public final class VaultBackup
                 String msg = "VaultBackup failed: " + e.getMessage();
                 log(msg);
                 return PROCESS_BUILDER_ERROR;
+            }
+        
+        // Return the vault backup utility's exit code.
+        try {process.waitFor(BACKUP_TIMEOUT_SECONDS, TimeUnit.SECONDS);}
+            catch (Exception e) {
+                String msg = "VaultBackup timed out after " + BACKUP_TIMEOUT_SECONDS + 
+                             " seconds waiting on backup process: " + e.getMessage();
+                log(msg);
+                return PROCESS_TIMEOUT_ERROR;
             }
         
         // Return the vault backup utility's exit code.
