@@ -3,7 +3,6 @@ package edu.utexas.tacc.tapis.vault.backup;
 import java.io.BufferedWriter;
 import java.io.Console;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
@@ -11,12 +10,16 @@ import java.io.RandomAccessFile;
 import java.lang.ProcessBuilder.Redirect;
 import java.net.InetAddress;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.TreeMap;
@@ -55,6 +58,9 @@ public final class VaultBackup
     // Email constants.
     private static final String EMAIL_FROM_ADDR = "vault-backup@tacc.cloud";
     private static final String EMAIL_TO_NAME   = "VaultBackup-Support";
+    
+    // Backup file permissions (640).
+    private static final HashSet<PosixFilePermission> _perms = initPerms(); 
     
     /* ********************************************************************** */
     /*                                Fields                                  */
@@ -147,11 +153,17 @@ public final class VaultBackup
             // Issue the backup call.
             int rc = backupVault(backupFilename, token);
             
+            // Restrict permissions to the backup file.
+            if (rc == 0) assignPermissions(backupFilename);
+            
             // Remove old backups only on success.
             if (rc == 0 || rc == PROCESS_TIMEOUT_ERROR) removeBackups();
             
             // Send the backup email.
             sendEmail(backupFilename, rc);
+            
+            // Hack to delete an automatically and erroneously created file.
+            removeJunkFile();
             
             // Exit if this was a one time backup invocation,
             // otherwise wait for the next backup time.
@@ -362,6 +374,18 @@ public final class VaultBackup
         
         // Return the possibly altered original file name without extension.
         return candidate;
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* assignPermissions:                                                           */
+    /* ---------------------------------------------------------------------------- */
+    private void assignPermissions(String backupFilename) 
+    {
+        // Best effort attempt to set backup file permissions.
+        try {
+            Path p = Path.of(_parms.outDir, backupFilename);
+            Files.setPosixFilePermissions(p, _perms);
+        } catch (Exception e) {}
     }
     
     /* ---------------------------------------------------------------------------- */
@@ -661,6 +685,33 @@ public final class VaultBackup
     private void closeLogFile()
     {
         if (_logWriter != null) try {_logWriter.close();} catch (Exception e) {}
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* removeJunkFile:                                                              */
+    /* ---------------------------------------------------------------------------- */
+    private void removeJunkFile()
+    {
+        try {
+            // Erroneously created file, probably as a side effect of a
+            // tapis library initialization.  Not easy to track down, so
+            // this hack just deletes it.
+            var f = new File(_parms.logDir, "tapis-sampleapi.log");
+            f.delete();
+        } catch (Exception e) {}
+    }
+    
+    /* ---------------------------------------------------------------------------- */
+    /* initPerms:                                                                   */
+    /* ---------------------------------------------------------------------------- */
+    private static HashSet<PosixFilePermission> initPerms()
+    {
+        // Configure 640 for use with backup files.
+        var s = new HashSet<PosixFilePermission>();
+        s.add(PosixFilePermission.OWNER_READ);
+        s.add(PosixFilePermission.OWNER_WRITE);
+        s.add(PosixFilePermission.GROUP_READ);
+        return s;
     }
 
     /* ---------------------------------------------------------------------------- */
