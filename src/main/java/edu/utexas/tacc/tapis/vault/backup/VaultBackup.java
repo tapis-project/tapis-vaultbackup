@@ -191,6 +191,7 @@ public final class VaultBackup
         
         // Read the file into a string
         var token = FileUtils.readFileToString(f, Charset.defaultCharset());
+        if (token != null) token = token.strip();
         
         // Wipe the file and then delete it.
         wipeFile(f);
