@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.StringWriter;
 import java.net.URL;
 
+import org.apache.commons.lang3.StringUtils;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
@@ -18,10 +19,7 @@ public class VaultBackupParms
     private static final int DEFAULT_MAX_COPIES = 10;
     
     // Output directory for backup snapshots.
-    private static final String DEFAULT_OUTPUT_DIR = "/root/vaultBackups";
-    
-    // File path for logging VaultBackup.
-    private static final String DEFAULT_LOG_DIR = "/root";
+    private static final String DEFAULT_OUTPUT_DIR = "/vaultBackups";
     
     // Email notification info.
     private static final int DEFAULT_SMTP_PORT = 25;
@@ -41,13 +39,21 @@ public class VaultBackupParms
             usage = "Prefix for backup file name (usually stage or prod)")
     public String filePrefix;
     
+    @Option(name = "-token", required = false, aliases = {"-tokenfile"}, 
+            usage = "File containing token (deleted after reading)")
+    public String tokenFile;    
+    
     @Option(name = "-out", required = false, aliases = {"-outdir"}, 
-            usage = "Output directory for backed up data")
-    public String outDir = DEFAULT_OUTPUT_DIR;    
+            usage = "Output directory for backed up data (default $HOME/vaultBackups)")
+    public String outDir;    
     
     @Option(name = "-log", required = false, aliases = {"-logdir"}, 
-            usage = "Directory for VaultBackup.out & VaultBackupProcess.out")
-    public String logDir = DEFAULT_LOG_DIR;    
+            usage = "Directory for VaultBackup.out & VaultBackupProcess.out (default $HOME)")
+    public String logDir;    
+    
+    @Option(name = "-noconsole", required = false,  
+            usage = "If true, won't log to stdout")
+    public boolean noConsole = false;
     
     @Option(name = "-period", required = false, aliases = {"-hrs, -hours"}, 
             usage = "Hours between backups (>= 1)")
@@ -213,6 +219,10 @@ public class VaultBackupParms
             if (startTimeMinute < 0 || startTimeMinute > 59)
                 throw new IllegalArgumentException("Invalid start minute: " + startTimeMinute + ".");
         }
+        
+        // Set the log and backup directories if they are set.
+        if (StringUtils.isBlank(logDir)) logDir = System.getProperty("user.home");
+        if (StringUtils.isBlank(outDir)) outDir = System.getProperty("user.home") + DEFAULT_OUTPUT_DIR;
         
         // Make sure the period is between 1 and 24.
         if (period < 1) 

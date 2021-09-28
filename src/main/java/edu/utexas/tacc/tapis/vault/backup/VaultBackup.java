@@ -3,11 +3,14 @@ package edu.utexas.tacc.tapis.vault.backup;
 import java.io.BufferedWriter;
 import java.io.Console;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.lang.ProcessBuilder.Redirect;
 import java.net.InetAddress;
+import java.nio.charset.Charset;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -15,9 +18,11 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import edu.utexas.tacc.tapis.shared.providers.email.EmailClientParameters;
@@ -100,7 +105,7 @@ public final class VaultBackup
     /* ---------------------------------------------------------------------- */
     /* execute:                                                               */
     /* ---------------------------------------------------------------------- */
-    private void execute()
+    private void execute() throws Exception
     {
         // Open log file.
         openLogFile();
@@ -160,12 +165,37 @@ public final class VaultBackup
     /* ---------------------------------------------------------------------- */
     /* getToken:                                                              */
     /* ---------------------------------------------------------------------- */
-    private String getToken()
+    private String getToken() throws Exception
     {
-        String prompt = "Please enter a non-expiring Vault root token: ";
-        String token = getInputFromConsole(prompt);
-        if (StringUtils.isBlank(token)) throw new IllegalArgumentException("No token entered.");
-        return token.strip();
+        // Interactive or in file with r/w access.
+        if (StringUtils.isBlank(_parms.tokenFile)) {
+            String prompt = "Please enter a non-expiring Vault root token: ";
+            String token = getInputFromConsole(prompt);
+            if (StringUtils.isBlank(token)) throw new IllegalArgumentException("No token entered.");
+            return token.strip();
+        } 
+        else return readAndDeleteTokenFile();
+    }
+    
+    /* ---------------------------------------------------------------------- */
+    /* readAndDeleteTokenFile:                                                */
+    /* ---------------------------------------------------------------------- */
+    private String readAndDeleteTokenFile() throws Exception
+    {
+        // Check access to the tokens file.
+        var f = new File(_parms.tokenFile);
+        if (!f.exists()) 
+            throw new IOException("Token file not found: " + _parms.tokenFile);
+        if (!f.canRead() || !f.canWrite())
+            throw new IOException("Read/write access is required on token file: " + _parms.tokenFile);
+        
+        // Read the file into a string
+        var token = FileUtils.readFileToString(f, Charset.defaultCharset());
+        
+        // Wipe the file and then delete it.
+        wipeFile(f);
+            
+        return token;
     }
     
     /* ---------------------------------------------------------------------- */
@@ -320,7 +350,13 @@ public final class VaultBackup
         while (true) {
             File f = new File(_parms.outDir, candidate + BACKUP_FILENAME_EXT);
             if (!f.exists()) break;
-            candidate = originalFilename + "-" + ++nextSeqNo;
+            
+            // Avoid overwriting existing files by appending a sequence number.
+            // The first 99 suffixes preserve the relationship between creation
+            // time and alphabetic order (important for backup removal).
+            var seqno = Integer.toString(++nextSeqNo);
+            if (seqno.length() == 1) seqno = "0" + seqno; // 
+            candidate = originalFilename + "-" + seqno;
         }
         
         // Return the possibly altered original file name without extension.
@@ -552,12 +588,51 @@ public final class VaultBackup
     }
     
     /* ---------------------------------------------------------------------------- */
+    /* wipeFile:                                                                    */
+    /* ---------------------------------------------------------------------------- */
+    private void wipeFile(File f) throws Exception
+    {
+        // Get the length in bytes of the file.
+        long len = f.length();
+        if (len == 0) {
+            f.delete();
+            return;
+        }
+        
+        // Access the file r/w with the force content to disk setting.
+        var rfile = new RandomAccessFile(f, "rws");
+        
+        // Create byte arrays.
+        byte[] zeros = new byte[(int)len];
+        for (int i = 0; i < len; i++) zeros[i] = 0;
+        byte[] ones = new byte[(int)len];
+        for (int i = 0; i < len; i++) ones[i] = 0xf;
+        byte[] rbytes = new byte[(int)len];
+        var rand = new Random();
+        
+        // Overwrite the file contents several times.
+        for (int i = 0; i < 3; i++) {
+            rfile.seek(0);
+            rfile.write(zeros);
+            rfile.seek(0);
+            rfile.write(ones);
+            rfile.seek(0);
+            rand.nextBytes(rbytes);
+            rfile.write(rbytes);
+        }
+        
+        // Close the file and delete it.
+        rfile.close();
+        f.delete();
+    }
+    
+    /* ---------------------------------------------------------------------------- */
     /* log:                                                                         */
     /* ---------------------------------------------------------------------------- */
     private void log(String msg)
     {
-        // Write to console and log file (if possible).
-        System.out.println(msg);
+        // Write to console and log file (if enabled).
+        if (!_parms.noConsole) System.out.println(msg);
         if (_logWriter != null) 
             try {
                 _logWriter.write(msg);
