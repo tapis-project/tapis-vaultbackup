@@ -1,4 +1,5 @@
 # tapis-vaultbackup
+
 Backup program for Hashicorp Vault instances that use the raft backend storage.  This utility program runs as a daemon the host on which Vault runs and periodically takes a snapshot of the local raft storage.  See the *VaultBackupParms.java* file for a list of available parameters or simply issue *VaultBackup -help*.  For implementation details, see *VaultBackup.java*.
 
 The build instructions below are tailored for the Red Hat/Centos flavor of Linux, but they can be adapted to other Linux types without too much work.
@@ -57,7 +58,7 @@ To start a new instance of tapis-vaultbackup:
 ### /home/vaultbackup/startActiveBackups
 
     #!/bin/bash
-
+    #
     # Use this file to kick off the perpetual tapis-vaultbackup program that will take
     # a snapshot of the Vault database every specified number of hours (by default
     # period=24).  The procedure is as follows:
